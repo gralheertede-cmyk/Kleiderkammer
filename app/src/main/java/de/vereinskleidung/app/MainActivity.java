@@ -144,6 +144,7 @@ class Api {
             try{
                 data.put("action",action);data.put("password",password);
                 HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection();
+                c.setInstanceFollowRedirects(true);
                 c.setRequestMethod("POST");c.setConnectTimeout(12000);c.setReadTimeout(20000);c.setDoOutput(true);c.setRequestProperty("Content-Type","application/json; charset=utf-8");
                 OutputStream o=c.getOutputStream();o.write(data.toString().getBytes("UTF-8"));o.close();
                 InputStream in=(c.getResponseCode()<400?c.getInputStream():c.getErrorStream());
