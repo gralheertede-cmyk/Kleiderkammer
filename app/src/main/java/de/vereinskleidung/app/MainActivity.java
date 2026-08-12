@@ -112,7 +112,9 @@ public class MainActivity extends Activity {
         HashMap<String,int[]> map=new HashMap<>();
         for(JSONObject i:items){String k=i.optString("type")+" | "+i.optString("size");int[] a=map.get(k);if(a==null){a=new int[2];map.put(k,a);}a[0]++;if(i.optString("status").equals("available"))a[1]++;}
         for(String k:new TreeSet<>(map.keySet())){int[]a=map.get(k);TextView t=new TextView(this);t.setText(k+"   Gesamt: "+a[0]+"   Verfügbar: "+a[1]+"   Ausgegeben: "+(a[0]-a[1]));t.setTextSize(16);t.setPadding(0,8,0,8);content.addView(t);}
-        content.addView(btn("➕ Bestand ergänzen")).setOnClickListener(v->showAddStock());
+        Button addStockButton = btn("➕ Bestand ergänzen");
+addStockButton.setOnClickListener(v -> showAddStock());
+content.addView(addStockButton);
     }
     void showAddStock(){
         base("Bestand ergänzen"); nav();
