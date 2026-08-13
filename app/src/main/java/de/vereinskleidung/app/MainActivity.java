@@ -1,4 +1,4 @@
-package de.gralheertede.kleiderkammer;
+package de.vereinskleidung.app;
 
 import android.app.Activity;
 import android.os.Bundle;
@@ -203,7 +203,7 @@ public class MainActivity extends Activity {
 
     private void toast(String s){Toast.makeText(this,s,Toast.LENGTH_LONG).show();}
 
-    private class Api {
+    private static class Api {
         String url="",password="";
         interface CB{void ok(JSONObject r);}
         void call(String action, JSONObject data, CB cb){ new Thread(()->{
