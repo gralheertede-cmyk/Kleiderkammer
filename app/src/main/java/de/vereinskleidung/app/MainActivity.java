@@ -135,7 +135,7 @@ public class MainActivity extends Activity {
         SizePicker p=new SizePicker(); p.view=new LinearLayout(this); p.view.setOrientation(LinearLayout.VERTICAL);
         TextView lab=text("Größe auswählen",16,DARK); lab.setPadding(0,dp(6),0,dp(6)); p.view.addView(lab);
         HorizontalScrollView hs=new HorizontalScrollView(this); LinearLayout row=new LinearLayout(this); row.setOrientation(LinearLayout.HORIZONTAL);
-        String[] sizes={"XS","S","M","L","XL","XXL","3XL"}; ArrayList<Button> bs=new ArrayList<>();
+        String[] sizes={"122","128","134","140","146","152","158","164","170","XS","S","M","L","XL","XXL","3XL"}; ArrayList<Button> bs=new ArrayList<>();
         for(String z:sizes){ Button b=lightButton(z); LinearLayout.LayoutParams q=new LinearLayout.LayoutParams(dp(68),dp(46));q.setMargins(0,0,dp(6),0);b.setLayoutParams(q);bs.add(b);row.addView(b);
             b.setOnClickListener(v->{p.selected=z;p.custom.setText("");for(Button x:bs){x.setTextColor(BLUE);x.setBackground(rounded(Color.rgb(231,238,248),12));}b.setTextColor(Color.WHITE);b.setBackground(rounded(BLUE,12));}); }
         hs.addView(row); p.view.addView(hs); p.custom=edit("Andere Größe (optional)"); p.custom.setLayoutParams(new LinearLayout.LayoutParams(-1,dp(50))); p.view.addView(p.custom); return p;
