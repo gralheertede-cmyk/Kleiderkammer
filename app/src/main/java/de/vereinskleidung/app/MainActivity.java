@@ -23,6 +23,7 @@ public class MainActivity extends Activity {
     private ArrayList<JSONObject> loans = new ArrayList<>();
     private ArrayList<JSONObject> history = new ArrayList<>();
     private boolean onHome = false;
+    private Runnable currentBackAction = null;
 
     private final int BLUE = Color.rgb(36,87,166);
     private final int DARK = Color.rgb(28,42,56);
@@ -64,7 +65,12 @@ public class MainActivity extends Activity {
     }
 
     private void base(String heading, boolean showBack){
+        base(heading, showBack, this::showHome);
+    }
+
+    private void base(String heading, boolean showBack, Runnable backAction){
         onHome = !showBack && !heading.equals("Anmeldung");
+        currentBackAction = showBack ? backAction : null;
         root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(BG);
         root.setPadding(dp(16),dp(14),dp(16),dp(16));
         root.setOnApplyWindowInsetsListener((v, insets) -> {
@@ -76,7 +82,8 @@ public class MainActivity extends Activity {
         if(showBack){
             Button back=lightButton("‹ Zurück");
             LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(dp(125),dp(46)); bp.setMargins(0,0,0,dp(8)); back.setLayoutParams(bp);
-            back.setOnClickListener(v->showHome()); header.addView(back);
+            back.setOnClickListener(v->{ if(currentBackAction!=null) currentBackAction.run(); else showHome(); });
+            header.addView(back);
         }
         TextView h=text(heading,27,DARK); h.setTypeface(Typeface.DEFAULT,Typeface.BOLD); h.setPadding(dp(2),0,0,dp(10)); header.addView(h);
         root.addView(header);
@@ -87,7 +94,9 @@ public class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed(){
-        if(!onHome){ showHome(); } else { super.onBackPressed(); }
+        if(currentBackAction!=null){ currentBackAction.run(); }
+        else if(!onHome){ showHome(); }
+        else { super.onBackPressed(); }
     }
 
     private void showLogin(){
@@ -169,23 +178,195 @@ public class MainActivity extends Activity {
     private void showOverview(){
         base("Wer hat was? / Archiv",true);
         if(members.isEmpty()){content.addView(text("Noch keine Mitglieder vorhanden.",16,MUTED));return;}
-        for(JSONObject m:members){ String id=m.optString("id"); LinearLayout c=card(); TextView name=text(m.optString("name"),20,DARK); name.setTypeface(Typeface.DEFAULT,Typeface.BOLD); c.addView(name);
-            TextView cur=text("Aktuell ausgeliehen",14,BLUE); cur.setTypeface(Typeface.DEFAULT,Typeface.BOLD); cur.setPadding(0,dp(10),0,dp(4)); c.addView(cur); boolean any=false;
-            for(JSONObject l:loans)if(l.optString("memberId").equals(id)){TextView t=text("• "+itemText(l),16,DARK);t.setPadding(dp(4),dp(3),0,dp(3));c.addView(t);any=true;} if(!any)c.addView(text("Nichts ausgeliehen",15,MUTED));
-            TextView ar=text("Archiv – zuletzt zurückgegeben",14,BLUE); ar.setTypeface(Typeface.DEFAULT,Typeface.BOLD); ar.setPadding(0,dp(12),0,dp(4)); c.addView(ar); int shown=0;
-            for(JSONObject h:history){if(shown>=5)break;if(h.optString("memberId").equals(id)&&h.optString("action").equals("RETURN")){TextView t=text("• "+h.optString("type")+" "+h.optString("size")+(h.optString("number").isEmpty()?"":" / Nr. "+h.optString("number"))+"  ·  "+dateShort(h.optString("timestamp")),15,DARK);t.setPadding(dp(4),dp(3),0,dp(3));c.addView(t);shown++;}}
-            if(shown==0)c.addView(text("Noch keine Rückgaben im Archiv",15,MUTED)); content.addView(c); }
+
+        TextView info=text("Übersicht aller Personen. Angezeigt werden die zuletzt bekannten Größen je Kleidungsart. Für das vollständige Archiv eine Person öffnen.",14,MUTED);
+        info.setPadding(dp(2),0,0,dp(10));
+        content.addView(info);
+
+        for(JSONObject m:members){
+            final JSONObject member=m;
+            String id=m.optString("id");
+            LinearLayout c=card();
+
+            TextView name=text(m.optString("name"),20,DARK);
+            name.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+            c.addView(name);
+
+            LinkedHashMap<String,String> sizes=latestSizesForMember(id);
+            if(sizes.isEmpty()){
+                TextView none=text("Noch keine Größen hinterlegt",15,MUTED);
+                none.setPadding(0,dp(8),0,dp(4));
+                c.addView(none);
+            } else {
+                for(String type:clothingTypes()){
+                    String size=sizes.get(type);
+                    if(size!=null && !size.isEmpty()){
+                        TextView row=text(type+": "+size,16,DARK);
+                        row.setPadding(dp(4),dp(3),0,dp(3));
+                        c.addView(row);
+                    }
+                }
+            }
+
+            ArrayList<String> current=currentLoansForMember(id);
+            TextView curTitle=text("Aktuell ausgeliehen",14,BLUE);
+            curTitle.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+            curTitle.setPadding(0,dp(10),0,dp(4));
+            c.addView(curTitle);
+            if(current.isEmpty()){
+                c.addView(text("Nichts ausgeliehen",15,MUTED));
+            } else {
+                for(String line:current){
+                    TextView t=text("• "+line,15,DARK);
+                    t.setPadding(dp(4),dp(2),0,dp(2));
+                    c.addView(t);
+                }
+            }
+
+            Button open=lightButton("Person öffnen / gesamtes Archiv");
+            open.setOnClickListener(v->showPersonArchive(member));
+            c.addView(open);
+            content.addView(c);
+        }
+    }
+
+    private String[] clothingTypes(){
+        return new String[]{"T-Shirt","Trikot","Trikothose","Trainingsjacke","Trainingshose"};
+    }
+
+    private LinkedHashMap<String,String> latestSizesForMember(String memberId){
+        LinkedHashMap<String,String> result=new LinkedHashMap<>();
+
+        // Aktuell ausgeliehene Sachen haben Vorrang.
+        for(JSONObject l:loans){
+            if(l.optString("memberId").equals(memberId)){
+                String type=l.optString("type");
+                String size=l.optString("size");
+                if(!type.isEmpty() && !size.isEmpty()) result.put(type,size);
+            }
+        }
+
+        // history kommt vom Server bereits mit den neuesten Vorgängen zuerst.
+        for(JSONObject h:history){
+            if(!h.optString("memberId").equals(memberId)) continue;
+            String type=h.optString("type");
+            String size=h.optString("size");
+            if(type.isEmpty() || size.isEmpty()) continue;
+            if(!result.containsKey(type)) result.put(type,size);
+        }
+        return result;
+    }
+
+    private ArrayList<String> currentLoansForMember(String memberId){
+        ArrayList<String> result=new ArrayList<>();
+        for(JSONObject l:loans){
+            if(l.optString("memberId").equals(memberId)) result.add(itemText(l));
+        }
+        return result;
+    }
+
+    private void showPersonArchive(JSONObject member){
+        final String memberId=member.optString("id");
+        final String memberName=member.optString("name");
+        base("Archiv – "+memberName,true,this::showOverview);
+
+        LinearLayout sizesCard=card();
+        sizesCard.addView(section("Größen nach Kleidungsart"));
+        LinkedHashMap<String,String> sizes=latestSizesForMember(memberId);
+        boolean hasSize=false;
+        for(String type:clothingTypes()){
+            String size=sizes.get(type);
+            if(size!=null && !size.isEmpty()){
+                TextView t=text(type+": "+size,17,DARK);
+                t.setPadding(dp(4),dp(4),0,dp(4));
+                sizesCard.addView(t);
+                hasSize=true;
+            }
+        }
+        if(!hasSize) sizesCard.addView(text("Noch keine Größen hinterlegt.",15,MUTED));
+        content.addView(sizesCard);
+
+        LinearLayout currentCard=card();
+        currentCard.addView(section("Aktuell ausgeliehen"));
+        ArrayList<String> current=currentLoansForMember(memberId);
+        if(current.isEmpty()){
+            currentCard.addView(text("Nichts ausgeliehen",15,MUTED));
+        } else {
+            for(String line:current){
+                TextView t=text("• "+line,16,DARK);
+                t.setPadding(dp(4),dp(3),0,dp(3));
+                currentCard.addView(t);
+            }
+        }
+        content.addView(currentCard);
+
+        LinearLayout archiveCard=card();
+        archiveCard.addView(section("Gesamtes Archiv"));
+        boolean any=false;
+        for(JSONObject h:history){
+            if(!h.optString("memberId").equals(memberId)) continue;
+
+            String action=h.optString("action");
+            String actionText=action.equals("ISSUE") ? "Ausgabe" :
+                    action.equals("RETURN") ? "Rückgabe" : action;
+
+            StringBuilder line=new StringBuilder();
+            line.append(dateShort(h.optString("timestamp")))
+                .append(" · ")
+                .append(actionText)
+                .append(" · ")
+                .append(h.optString("type"))
+                .append(" ")
+                .append(h.optString("size"));
+
+            if(!h.optString("number").isEmpty()){
+                line.append(" · Nr. ").append(h.optString("number"));
+            }
+
+            TextView t=text(line.toString(),15,DARK);
+            t.setPadding(dp(4),dp(4),0,dp(4));
+            archiveCard.addView(t);
+            any=true;
+        }
+        if(!any) archiveCard.addView(text("Noch keine Vorgänge im Archiv.",15,MUTED));
+        content.addView(archiveCard);
     }
 
     private String itemText(JSONObject i){return i.optString("type")+" · "+i.optString("size")+(i.optString("number").isEmpty()?"":" · Nr. "+i.optString("number"));}
     private String dateShort(String iso){try{Date d=new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss",Locale.US).parse(iso);return new SimpleDateFormat("dd.MM.yyyy",Locale.GERMANY).format(d);}catch(Exception e){return iso.length()>=10?iso.substring(0,10):iso;}}
 
     private void showStock(){
-        base("Bestand",true); HashMap<String,int[]> map=new HashMap<>();
-        for(JSONObject i:items){String k=i.optString("type")+" | Größe "+i.optString("size");int[] a=map.get(k);if(a==null){a=new int[2];map.put(k,a);}a[0]++;if(i.optString("status").equals("available"))a[1]++;}
-        if(map.isEmpty())content.addView(text("Noch kein Bestand erfasst.",16,MUTED));
-        for(String k:new TreeSet<>(map.keySet())){int[] a=map.get(k);LinearLayout c=card();TextView t=text(k,17,DARK);t.setTypeface(Typeface.DEFAULT,Typeface.BOLD);c.addView(t);c.addView(text("Gesamt: "+a[0]+"    Verfügbar: "+a[1]+"    Ausgegeben: "+(a[0]-a[1]),15,MUTED));content.addView(c);}
-        Button add=button("＋ Bestand ergänzen"); add.setOnClickListener(v->showAddStock()); content.addView(add);
+        base("Bestand",true);
+
+        TreeMap<String,Integer> available=new TreeMap<>();
+        for(JSONObject i:items){
+            if(!i.optString("status").equals("available")) continue;
+            String type=i.optString("type");
+            String size=i.optString("size");
+            String key=type+" | Größe "+size;
+            available.put(key,available.getOrDefault(key,0)+1);
+        }
+
+        TextView info=text("Nur aktuell verfügbare, nicht verliehene Kleidung. Nummern werden hier bewusst nicht angezeigt.",14,MUTED);
+        info.setPadding(dp(2),0,0,dp(10));
+        content.addView(info);
+
+        if(available.isEmpty()){
+            content.addView(text("Aktuell ist kein verfügbarer Bestand vorhanden.",16,MUTED));
+        } else {
+            for(Map.Entry<String,Integer> entry:available.entrySet()){
+                LinearLayout c=card();
+                TextView t=text(entry.getKey(),17,DARK);
+                t.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+                c.addView(t);
+                c.addView(text("Verfügbar: "+entry.getValue(),16,MUTED));
+                content.addView(c);
+            }
+        }
+
+        Button add=button("＋ Bestand ergänzen");
+        add.setOnClickListener(v->showAddStock());
+        content.addView(add);
     }
 
     private void showAddStock(){
