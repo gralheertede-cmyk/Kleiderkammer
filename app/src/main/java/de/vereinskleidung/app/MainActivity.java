@@ -133,7 +133,11 @@ public class MainActivity extends Activity {
         Button e=lightButton("⚙  Verwaltung / Inventur"); e.setOnClickListener(v->showAdmin()); content.addView(e);
     }
 
-    private ArrayAdapter<String> memberAdapter(){ArrayList<String>a=new ArrayList<>();for(JSONObject m:members)a.add(m.optString("name"));return new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,a);}
+    private String memberLabel(JSONObject m){
+        String number=m.optString("memberNumber").trim();
+        return number.isEmpty()?m.optString("name"):"Nr. "+number+" · "+m.optString("name");
+    }
+    private ArrayAdapter<String> memberAdapter(){ArrayList<String>a=new ArrayList<>();for(JSONObject m:members)a.add(memberLabel(m));return new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,a);}
     private Spinner styledSpinner(ArrayAdapter<String> adapter){ Spinner s=new Spinner(this); s.setAdapter(adapter); s.setBackground(rounded(Color.WHITE,12)); s.setPadding(dp(12),0,dp(12),0); s.setLayoutParams(new LinearLayout.LayoutParams(-1,dp(54))); return s; }
 
     private class SizePicker {
@@ -188,7 +192,7 @@ public class MainActivity extends Activity {
             String id=m.optString("id");
             LinearLayout c=card();
 
-            TextView name=text(m.optString("name"),20,DARK);
+            TextView name=text(memberLabel(m),20,DARK);
             name.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
             c.addView(name);
 
@@ -267,7 +271,7 @@ public class MainActivity extends Activity {
 
     private void showPersonArchive(JSONObject member){
         final String memberId=member.optString("id");
-        final String memberName=member.optString("name");
+        final String memberName=memberLabel(member);
         base("Archiv – "+memberName,true,this::showOverview);
 
         LinearLayout sizesCard=card();
@@ -377,9 +381,56 @@ public class MainActivity extends Activity {
     }
 
     private void showAdmin(){
-        base("Verwaltung / Inventur",true); LinearLayout c=card(); c.addView(section("Neues Mitglied")); EditText name=edit("Vor- und Nachname"); c.addView(name); Button add=button("Mitglied hinzufügen"); c.addView(add); content.addView(c);
-        add.setOnClickListener(v->{if(name.getText().toString().trim().isEmpty()){toast("Bitte Namen eingeben");return;}JSONObject p=new JSONObject();try{p.put("name",name.getText().toString().trim());}catch(Exception ignored){}api.call("addMember",p,r->runOnUiThread(()->{if(r.optBoolean("ok")){toast("Mitglied hinzugefügt");load();}else toast(r.optString("error"));}));});
-        content.addView(section("Mitglieder")); for(JSONObject m:members){LinearLayout mc=card();mc.addView(text(m.optString("name"),16,DARK));content.addView(mc);} Button refresh=lightButton("↻ Daten aktualisieren");refresh.setOnClickListener(v->load());content.addView(refresh);
+        base("Verwaltung / Inventur",true);
+
+        LinearLayout c=card();
+        c.addView(section("Neues Mitglied"));
+        EditText name=edit("Vor- und Nachname");
+        EditText memberNumber=edit("Mitgliedsnummer (optional)");
+        c.addView(name);
+        c.addView(memberNumber);
+        Button add=button("Mitglied hinzufügen");
+        c.addView(add);
+        content.addView(c);
+
+        add.setOnClickListener(v->{
+            if(name.getText().toString().trim().isEmpty()){
+                toast("Bitte Namen eingeben");
+                return;
+            }
+            JSONObject p=new JSONObject();
+            try{
+                p.put("name",name.getText().toString().trim());
+                p.put("memberNumber",memberNumber.getText().toString().trim());
+            }catch(Exception ignored){}
+            add.setEnabled(false);
+            api.call("addMember",p,r->runOnUiThread(()->{
+                add.setEnabled(true);
+                if(r.optBoolean("ok")){
+                    toast("Mitglied hinzugefügt");
+                    load();
+                }else{
+                    toast(r.optString("error"));
+                }
+            }));
+        });
+
+        content.addView(section("Mitglieder"));
+        for(JSONObject m:members){
+            LinearLayout mc=card();
+            TextView memberName=text(memberLabel(m),17,DARK);
+            memberName.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+            mc.addView(memberName);
+            content.addView(mc);
+        }
+
+        TextView sheetInfo=text("Mitglieder können auch direkt im Google-Sheet „Members“ eingetragen werden. Name und optional memberNumber genügen; ID, active und createdAt werden automatisch ergänzt.",14,MUTED);
+        sheetInfo.setPadding(dp(4),dp(6),dp(4),dp(8));
+        content.addView(sheetInfo);
+
+        Button refresh=lightButton("↻ Daten aktualisieren");
+        refresh.setOnClickListener(v->load());
+        content.addView(refresh);
     }
 
     private void toast(String s){Toast.makeText(this,s,Toast.LENGTH_LONG).show();}
