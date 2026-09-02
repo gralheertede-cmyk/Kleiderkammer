@@ -1,6 +1,7 @@
 package de.vereinskleidung.app;
 
 import android.app.Activity;
+import android.app.ProgressDialog;
 import android.os.Bundle;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -8,6 +9,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
+import android.view.WindowManager;
 import android.widget.*;
 import org.json.*;
 import java.io.*;
@@ -24,6 +26,8 @@ public class MainActivity extends Activity {
     private ArrayList<JSONObject> history = new ArrayList<>();
     private boolean onHome = false;
     private Runnable currentBackAction = null;
+    private ProgressDialog loadingDialog;
+    private ScrollView activeScrollView;
 
     private final int BLUE = Color.rgb(36,87,166);
     private final int DARK = Color.rgb(28,42,56);
@@ -33,6 +37,13 @@ public class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
+
+        // Bei geöffneter Tastatur wird der sichtbare Bereich verkleinert,
+        // damit die Seite weiter gescrollt werden kann.
+        getWindow().setSoftInputMode(
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        );
+
         api = new Api();
         showLogin();
     }
@@ -56,8 +67,44 @@ public class MainActivity extends Activity {
         Button b=button(s); b.setTextColor(BLUE); b.setBackground(rounded(Color.rgb(231,238,248),14)); return b;
     }
     private EditText edit(String hint){
-        EditText e=new EditText(this); e.setHint(hint); e.setTextSize(16); e.setSingleLine(true); e.setPadding(dp(14),0,dp(14),0); e.setBackground(rounded(Color.WHITE,12));
-        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(54)); p.setMargins(0,dp(6),0,dp(6)); e.setLayoutParams(p); return e;
+        EditText e=new EditText(this);
+        e.setHint(hint);
+        e.setTextSize(16);
+        e.setSingleLine(true);
+        e.setPadding(dp(14),0,dp(14),0);
+        e.setBackground(rounded(Color.WHITE,12));
+
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(54));
+        p.setMargins(0,dp(6),0,dp(6));
+        e.setLayoutParams(p);
+
+        // Wenn dieses Feld den Fokus bekommt und die Tastatur aufgeht,
+        // automatisch so weit scrollen, dass Feld und Bereich darunter sichtbar bleiben.
+        e.setOnFocusChangeListener((v,hasFocus)->{
+            if(hasFocus && activeScrollView!=null){
+                activeScrollView.postDelayed(()->{
+                    try{
+                        int[] fieldPos=new int[2];
+                        int[] scrollPos=new int[2];
+
+                        v.getLocationOnScreen(fieldPos);
+                        activeScrollView.getLocationOnScreen(scrollPos);
+
+                        int wantedBottom=fieldPos[1]+v.getHeight()+dp(110);
+                        int visibleBottom=scrollPos[1]+activeScrollView.getHeight();
+
+                        if(wantedBottom>visibleBottom){
+                            activeScrollView.smoothScrollBy(
+                                    0,
+                                    wantedBottom-visibleBottom
+                            );
+                        }
+                    }catch(Exception ignored){}
+                },300);
+            }
+        });
+
+        return e;
     }
     private LinearLayout card(){
         LinearLayout c=new LinearLayout(this); c.setOrientation(LinearLayout.VERTICAL); c.setPadding(dp(16),dp(14),dp(16),dp(14)); c.setBackground(rounded(CARD,16));
@@ -87,16 +134,59 @@ public class MainActivity extends Activity {
         }
         TextView h=text(heading,27,DARK); h.setTypeface(Typeface.DEFAULT,Typeface.BOLD); h.setPadding(dp(2),0,0,dp(10)); header.addView(h);
         root.addView(header);
-        ScrollView sv=new ScrollView(this); sv.setFillViewport(true);
-        content=new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL); content.setPadding(0,0,0,dp(20)); sv.addView(content);
-        root.addView(sv,new LinearLayout.LayoutParams(-1,0,1));
-        setContentView(root); root.requestApplyInsets();
+        activeScrollView=new ScrollView(this);
+        activeScrollView.setFillViewport(true);
+        activeScrollView.setClipToPadding(false);
+        activeScrollView.setPadding(0,0,0,dp(110));
+
+        content=new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(0,0,0,dp(50));
+        activeScrollView.addView(content);
+
+        root.addView(activeScrollView,new LinearLayout.LayoutParams(-1,0,1));
+        setContentView(root);
+        root.requestApplyInsets();
     }
 
     @Override public void onBackPressed(){
         if(currentBackAction!=null){ currentBackAction.run(); }
         else if(!onHome){ showHome(); }
         else { super.onBackPressed(); }
+    }
+
+    private void showLoading(String message){
+        hideLoading();
+        loadingDialog=new ProgressDialog(this);
+        loadingDialog.setMessage(message);
+        loadingDialog.setIndeterminate(true);
+        loadingDialog.setCancelable(false);
+        loadingDialog.setCanceledOnTouchOutside(false);
+        loadingDialog.show();
+    }
+
+    private void hideLoading(){
+        if(loadingDialog!=null){
+            try{
+                if(loadingDialog.isShowing()) loadingDialog.dismiss();
+            }catch(Exception ignored){}
+            loadingDialog=null;
+        }
+    }
+
+    private boolean applyServerState(JSONObject r){
+        JSONArray ma=r.optJSONArray("members");
+        JSONArray ia=r.optJSONArray("items");
+        JSONArray la=r.optJSONArray("loans");
+        JSONArray ha=r.optJSONArray("history");
+
+        if(ma==null || ia==null || la==null || ha==null) return false;
+
+        members=toList(ma);
+        items=toList(ia);
+        loans=toList(la);
+        history=toList(ha);
+        return true;
     }
 
     private void showLogin(){
@@ -107,20 +197,78 @@ public class MainActivity extends Activity {
         EditText pw=edit("Vereins-Passwort"); pw.setInputType(0x81);
         url.setText(getPreferences(0).getString("url",""));
         c.addView(url); c.addView(pw); Button login=button("Anmelden"); c.addView(login); content.addView(c);
+
         login.setOnClickListener(v->{
-            api.url=url.getText().toString().trim(); api.password=pw.getText().toString();
-            if(api.url.isEmpty()||api.password.isEmpty()){toast("URL und Passwort eingeben");return;}
-            getPreferences(0).edit().putString("url",api.url).apply(); login.setEnabled(false);
-            api.call("summary",new JSONObject(),r->runOnUiThread(()->{login.setEnabled(true); if(r.optBoolean("ok")) load(); else toast(r.optString("error","Anmeldung fehlgeschlagen"));}));
+            api.url=url.getText().toString().trim();
+            api.password=pw.getText().toString();
+
+            if(api.url.isEmpty()||api.password.isEmpty()){
+                toast("URL und Passwort eingeben");
+                return;
+            }
+
+            getPreferences(0).edit().putString("url",api.url).apply();
+            login.setEnabled(false);
+            showLoading("Anmeldung läuft …");
+
+            // Direkt bootstrap laden: spart den früheren zusätzlichen summary-Aufruf.
+            api.call("bootstrap",new JSONObject(),r->runOnUiThread(()->{
+                hideLoading();
+                login.setEnabled(true);
+
+                if(!r.optBoolean("ok")){
+                    toast(r.optString("error","Anmeldung fehlgeschlagen"));
+                    return;
+                }
+
+                if(!applyServerState(r)){
+                    toast("Daten konnten nicht geladen werden");
+                    return;
+                }
+
+                showHome();
+            }));
         });
     }
 
     private void load(){
+        showLoading("Daten werden geladen …");
         api.call("bootstrap",new JSONObject(),r->runOnUiThread(()->{
-            if(!r.optBoolean("ok")){toast(r.optString("error","Daten konnten nicht geladen werden"));return;}
-            members=toList(r.optJSONArray("members")); items=toList(r.optJSONArray("items")); loans=toList(r.optJSONArray("loans")); history=toList(r.optJSONArray("history")); showHome();
+            hideLoading();
+
+            if(!r.optBoolean("ok")){
+                toast(r.optString("error","Daten konnten nicht geladen werden"));
+                return;
+            }
+
+            if(!applyServerState(r)){
+                toast("Ungültige Serverantwort");
+                return;
+            }
+
+            showHome();
         }));
     }
+
+    private void finishWrite(JSONObject r, String successText){
+        hideLoading();
+
+        if(!r.optBoolean("ok")){
+            toast(r.optString("error","Speichern nicht möglich"));
+            return;
+        }
+
+        // Neue Server-Version liefert die aktualisierten Daten direkt mit.
+        if(applyServerState(r)){
+            toast(successText);
+            showHome();
+        }else{
+            // Sicherheits-Fallback, falls versehentlich noch die alte Code.gs läuft.
+            toast(successText);
+            load();
+        }
+    }
+
     private ArrayList<JSONObject> toList(JSONArray a){ArrayList<JSONObject>x=new ArrayList<>(); if(a!=null)for(int i=0;i<a.length();i++){JSONObject o=a.optJSONObject(i);if(o!=null)x.add(o);}return x;}
 
     private void showHome(){
@@ -163,7 +311,13 @@ public class MainActivity extends Activity {
         SizePicker size=sizePicker(); c.addView(size.view); EditText number=edit("Nummer (nur falls vorhanden)"); c.addView(number);
         Button save=button("Ausgabe speichern"); c.addView(save); content.addView(c);
         save.setOnClickListener(v->{ String sz=size.value(); if(sz.isEmpty()){toast("Bitte Größe auswählen");return;} JSONObject m=members.get(sp.getSelectedItemPosition()); JSONObject p=new JSONObject(); try{p.put("memberId",m.optString("id"));p.put("type",typ.getSelectedItem().toString());p.put("size",sz);p.put("number",number.getText().toString().trim());}catch(Exception ignored){}
-            save.setEnabled(false); api.call("issue",p,r->runOnUiThread(()->{save.setEnabled(true);if(r.optBoolean("ok")){toast("Ausgabe gespeichert");load();}else toast(r.optString("error","Nicht möglich"));})); });
+            save.setEnabled(false);
+            showLoading("Ausgabe wird gespeichert …");
+            api.call("issue",p,r->runOnUiThread(()->{
+                save.setEnabled(true);
+                finishWrite(r,"Ausgabe gespeichert");
+            }));
+        });
     }
 
     private void showReturn(){
@@ -175,7 +329,7 @@ public class MainActivity extends Activity {
             for(JSONObject l:loans) if(l.optString("memberId").equals(id)){ CheckBox cb=new CheckBox(this); cb.setText(itemText(l)); cb.setTextSize(16); cb.setPadding(dp(8),dp(8),dp(8),dp(8)); cb.setTag(l.optString("id")); list.addView(cb); count++; }
             if(count==0){list.addView(text("Diese Person hat aktuell nichts ausgeliehen.",16,MUTED));return;}
             Button all=lightButton("Alle markieren"); list.addView(all); all.setOnClickListener(x->{for(int i=0;i<list.getChildCount();i++){View q=list.getChildAt(i);if(q instanceof CheckBox)((CheckBox)q).setChecked(true);}});
-            Button ret=button("Markierte zurückgeben"); list.addView(ret); ret.setOnClickListener(x->{JSONArray ids=new JSONArray();for(int i=0;i<list.getChildCount();i++){View q=list.getChildAt(i);if(q instanceof CheckBox&&((CheckBox)q).isChecked())ids.put(q.getTag().toString());}if(ids.length()==0){toast("Bitte mindestens ein Teil markieren");return;}JSONObject p=new JSONObject();try{p.put("itemIds",ids);}catch(Exception ignored){}ret.setEnabled(false);api.call("return",p,r->runOnUiThread(()->{ret.setEnabled(true);if(r.optBoolean("ok")){toast("Rückgabe gespeichert");load();}else toast(r.optString("error"));}));});
+            Button ret=button("Markierte zurückgeben"); list.addView(ret); ret.setOnClickListener(x->{JSONArray ids=new JSONArray();for(int i=0;i<list.getChildCount();i++){View q=list.getChildAt(i);if(q instanceof CheckBox&&((CheckBox)q).isChecked())ids.put(q.getTag().toString());}if(ids.length()==0){toast("Bitte mindestens ein Teil markieren");return;}JSONObject p=new JSONObject();try{p.put("itemIds",ids);}catch(Exception ignored){}ret.setEnabled(false);showLoading("Rückgabe wird gespeichert …");api.call("return",p,r->runOnUiThread(()->{ret.setEnabled(true);finishWrite(r,"Rückgabe gespeichert");}));});
         });
     }
 
@@ -377,7 +531,7 @@ public class MainActivity extends Activity {
         base("Bestand ergänzen",true); LinearLayout c=card(); String[] types={"T-Shirt","Trikot","Trikothose","Trainingsjacke","Trainingshose"};
         c.addView(section("Kleidungsart")); Spinner typ=styledSpinner(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,types)); c.addView(typ); SizePicker size=sizePicker(); c.addView(size.view);
         EditText nums=edit("Nummern, z. B. 10-19 oder 10,11,12"); c.addView(nums); EditText count=edit("Anzahl (bei Sachen ohne Nummer)"); count.setInputType(2); c.addView(count); Button b=button("In Bestand aufnehmen");c.addView(b);content.addView(c);
-        b.setOnClickListener(v->{String sz=size.value();if(sz.isEmpty()){toast("Bitte Größe auswählen");return;}JSONObject p=new JSONObject();try{p.put("type",typ.getSelectedItem().toString());p.put("size",sz);p.put("numbers",nums.getText().toString().trim());p.put("count",count.getText().toString().trim());}catch(Exception ignored){}b.setEnabled(false);api.call("addStock",p,r->runOnUiThread(()->{b.setEnabled(true);if(r.optBoolean("ok")){toast("Bestand ergänzt");load();}else toast(r.optString("error"));}));});
+        b.setOnClickListener(v->{String sz=size.value();if(sz.isEmpty()){toast("Bitte Größe auswählen");return;}JSONObject p=new JSONObject();try{p.put("type",typ.getSelectedItem().toString());p.put("size",sz);p.put("numbers",nums.getText().toString().trim());p.put("count",count.getText().toString().trim());}catch(Exception ignored){}b.setEnabled(false);showLoading("Bestand wird gespeichert …");api.call("addStock",p,r->runOnUiThread(()->{b.setEnabled(true);finishWrite(r,"Bestand ergänzt");}));});
     }
 
     private void showAdmin(){
@@ -404,14 +558,10 @@ public class MainActivity extends Activity {
                 p.put("memberNumber",memberNumber.getText().toString().trim());
             }catch(Exception ignored){}
             add.setEnabled(false);
+            showLoading("Mitglied wird gespeichert …");
             api.call("addMember",p,r->runOnUiThread(()->{
                 add.setEnabled(true);
-                if(r.optBoolean("ok")){
-                    toast("Mitglied hinzugefügt");
-                    load();
-                }else{
-                    toast(r.optString("error"));
-                }
+                finishWrite(r,"Mitglied hinzugefügt");
             }));
         });
 
@@ -438,12 +588,72 @@ public class MainActivity extends Activity {
     private static class Api {
         String url="",password="";
         interface CB{void ok(JSONObject r);}
-        void call(String action, JSONObject data, CB cb){ new Thread(()->{
-            try{data.put("action",action);data.put("password",password); HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection(); c.setInstanceFollowRedirects(true); c.setRequestMethod("POST");c.setConnectTimeout(15000);c.setReadTimeout(25000);c.setDoOutput(true);c.setRequestProperty("Content-Type","application/json; charset=utf-8");c.setRequestProperty("Accept","application/json");
-                try(OutputStream o=c.getOutputStream()){o.write(data.toString().getBytes("UTF-8"));}
-                int code=c.getResponseCode(); InputStream in=code<400?c.getInputStream():c.getErrorStream(); BufferedReader br=new BufferedReader(new InputStreamReader(in));StringBuilder s=new StringBuilder();String line;while((line=br.readLine())!=null)s.append(line);String body=s.toString();
-                if(body.trim().startsWith("<")){JSONObject r=new JSONObject();r.put("ok",false);r.put("error","Google-Verbindung liefert keine gültigen Daten. Bitte Apps-Script-Bereitstellung prüfen.");cb.ok(r);return;}cb.ok(new JSONObject(body));
-            }catch(Exception e){try{JSONObject r=new JSONObject();r.put("ok",false);r.put("error","Netzwerkfehler: "+e.getMessage());cb.ok(r);}catch(Exception ignored){}}
-        }).start(); }
+
+        void call(String action, JSONObject data, CB cb){
+            new Thread(()->{
+                HttpURLConnection c=null;
+                try{
+                    data.put("action",action);
+                    data.put("password",password);
+
+                    c=(HttpURLConnection)new URL(url).openConnection();
+                    c.setInstanceFollowRedirects(true);
+                    c.setRequestMethod("POST");
+                    c.setConnectTimeout(12000);
+                    c.setReadTimeout(22000);
+                    c.setDoOutput(true);
+                    c.setUseCaches(false);
+                    c.setRequestProperty("Content-Type","application/json; charset=utf-8");
+                    c.setRequestProperty("Accept","application/json");
+                    c.setRequestProperty("Connection","keep-alive");
+
+                    byte[] payload=data.toString().getBytes("UTF-8");
+                    c.setFixedLengthStreamingMode(payload.length);
+
+                    try(OutputStream o=c.getOutputStream()){
+                        o.write(payload);
+                    }
+
+                    int code=c.getResponseCode();
+                    InputStream in=code<400?c.getInputStream():c.getErrorStream();
+
+                    if(in==null){
+                        JSONObject r=new JSONObject();
+                        r.put("ok",false);
+                        r.put("error","Keine Antwort vom Server");
+                        cb.ok(r);
+                        return;
+                    }
+
+                    BufferedReader br=new BufferedReader(new InputStreamReader(in,"UTF-8"));
+                    StringBuilder s=new StringBuilder();
+                    String line;
+                    while((line=br.readLine())!=null) s.append(line);
+                    br.close();
+
+                    String body=s.toString();
+
+                    if(body.trim().startsWith("<")){
+                        JSONObject r=new JSONObject();
+                        r.put("ok",false);
+                        r.put("error","Google-Verbindung liefert keine gültigen Daten. Bitte Apps-Script-Bereitstellung prüfen.");
+                        cb.ok(r);
+                        return;
+                    }
+
+                    cb.ok(new JSONObject(body));
+                }catch(Exception e){
+                    try{
+                        JSONObject r=new JSONObject();
+                        r.put("ok",false);
+                        r.put("error","Netzwerkfehler: "+e.getMessage());
+                        cb.ok(r);
+                    }catch(Exception ignored){}
+                }finally{
+                    if(c!=null) c.disconnect();
+                }
+            }).start();
+        }
     }
+
 }
