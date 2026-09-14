@@ -1,6 +1,8 @@
 package de.vereinskleidung.app;
 
 import android.app.Activity;
+import android.net.Uri;
+import android.content.Intent;
 import android.app.ProgressDialog;
 import android.os.Bundle;
 import android.graphics.Color;
@@ -28,6 +30,9 @@ public class MainActivity extends Activity {
     private Runnable currentBackAction = null;
     private ProgressDialog loadingDialog;
     private ScrollView activeScrollView;
+    private static final int REQUEST_SAVE_PACKLIST = 4401;
+    private String pendingExportText = "";
+    private String pendingExportFileName = "Packliste.txt";
 
     private final int BLUE = Color.rgb(36,87,166);
     private final int DARK = Color.rgb(28,42,56);
@@ -278,6 +283,7 @@ public class MainActivity extends Activity {
         Button b=button("↩  Kleidung zurücknehmen"); b.setOnClickListener(v->showReturn()); content.addView(b);
         Button c=button("👥  Wer hat was? / Archiv"); c.setOnClickListener(v->showOverview()); content.addView(c);
         Button d=button("📦  Bestand"); d.setOnClickListener(v->showStock()); content.addView(d);
+        Button list=button("📋  Pack- / Größenlisten"); list.setOnClickListener(v->showPackingLists()); content.addView(list);
         Button e=lightButton("⚙  Verwaltung / Inventur"); e.setOnClickListener(v->showAdmin()); content.addView(e);
     }
 
@@ -492,6 +498,235 @@ public class MainActivity extends Activity {
 
     private String itemText(JSONObject i){return i.optString("type")+" · "+i.optString("size")+(i.optString("number").isEmpty()?"":" · Nr. "+i.optString("number"));}
     private String dateShort(String iso){try{Date d=new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss",Locale.US).parse(iso);return new SimpleDateFormat("dd.MM.yyyy",Locale.GERMANY).format(d);}catch(Exception e){return iso.length()>=10?iso.substring(0,10):iso;}}
+
+
+    private void showPackingLists(){
+        base("Pack- / Größenlisten",true);
+
+        TextView intro=text(
+                "Wähle eine oder mehrere Kleidungsarten und anschließend alle oder einzelne Personen. " +
+                "Die Liste zeigt pro Person die zuletzt bekannte Größe je ausgewählter Kleidungsart.",
+                14,
+                MUTED
+        );
+        intro.setPadding(dp(2),0,0,dp(10));
+        content.addView(intro);
+
+        LinearLayout typeCard=card();
+        typeCard.addView(section("Kleidungsarten"));
+
+        LinkedHashMap<String,CheckBox> typeChecks=new LinkedHashMap<>();
+        CheckBox allTypes=new CheckBox(this);
+        allTypes.setText("Alle Kleidungsarten");
+        allTypes.setTextSize(16);
+        typeCard.addView(allTypes);
+
+        for(String type:clothingTypes()){
+            CheckBox cb=new CheckBox(this);
+            cb.setText(type);
+            cb.setTextSize(16);
+            cb.setPadding(dp(8),dp(2),0,dp(2));
+            typeChecks.put(type,cb);
+            typeCard.addView(cb);
+        }
+
+        allTypes.setOnCheckedChangeListener((buttonView,isChecked)->{
+            for(CheckBox cb:typeChecks.values()) cb.setChecked(isChecked);
+        });
+
+        content.addView(typeCard);
+
+        LinearLayout personCard=card();
+        personCard.addView(section("Personen"));
+
+        CheckBox allPeople=new CheckBox(this);
+        allPeople.setText("Alle Personen");
+        allPeople.setTextSize(16);
+        allPeople.setChecked(true);
+        personCard.addView(allPeople);
+
+        LinkedHashMap<String,CheckBox> personChecks=new LinkedHashMap<>();
+        for(JSONObject m:members){
+            CheckBox cb=new CheckBox(this);
+            cb.setText(memberLabel(m));
+            cb.setTextSize(16);
+            cb.setPadding(dp(8),dp(2),0,dp(2));
+            cb.setChecked(true);
+            cb.setTag(m.optString("id"));
+            personChecks.put(m.optString("id"),cb);
+            personCard.addView(cb);
+        }
+
+        allPeople.setOnCheckedChangeListener((buttonView,isChecked)->{
+            for(CheckBox cb:personChecks.values()) cb.setChecked(isChecked);
+        });
+
+        content.addView(personCard);
+
+        Button generate=button("Liste erzeugen");
+        content.addView(generate);
+
+        LinearLayout resultCard=card();
+        resultCard.setVisibility(View.GONE);
+        resultCard.addView(section("Erzeugte Liste"));
+
+        HorizontalScrollView tableScroll=new HorizontalScrollView(this);
+        TextView resultText=text("",14,DARK);
+        resultText.setTypeface(Typeface.MONOSPACE);
+        resultText.setPadding(dp(4),dp(4),dp(12),dp(8));
+        tableScroll.addView(resultText);
+        resultCard.addView(tableScroll);
+
+        Button saveText=lightButton("Als Textdatei speichern");
+        resultCard.addView(saveText);
+        content.addView(resultCard);
+
+        String saved=getPreferences(0).getString("last_pack_list","");
+        String savedName=getPreferences(0).getString("last_pack_list_name","Packliste.txt");
+        if(!saved.isEmpty()){
+            resultText.setText(saved);
+            pendingExportText=saved;
+            pendingExportFileName=savedName;
+            resultCard.setVisibility(View.VISIBLE);
+        }
+
+        generate.setOnClickListener(v->{
+            ArrayList<String> selectedTypes=new ArrayList<>();
+            for(Map.Entry<String,CheckBox> e:typeChecks.entrySet()){
+                if(e.getValue().isChecked()) selectedTypes.add(e.getKey());
+            }
+
+            if(selectedTypes.isEmpty()){
+                toast("Bitte mindestens eine Kleidungsart auswählen");
+                return;
+            }
+
+            ArrayList<JSONObject> selectedMembers=new ArrayList<>();
+            for(JSONObject m:members){
+                CheckBox cb=personChecks.get(m.optString("id"));
+                if(cb!=null && cb.isChecked()) selectedMembers.add(m);
+            }
+
+            if(selectedMembers.isEmpty()){
+                toast("Bitte mindestens eine Person auswählen");
+                return;
+            }
+
+            String table=buildPackingTable(selectedMembers,selectedTypes);
+            resultText.setText(table);
+            resultCard.setVisibility(View.VISIBLE);
+
+            String date=new SimpleDateFormat("yyyy-MM-dd",Locale.GERMANY).format(new Date());
+            pendingExportText=table;
+            pendingExportFileName="Packliste_"+date+".txt";
+
+            getPreferences(0).edit()
+                    .putString("last_pack_list",table)
+                    .putString("last_pack_list_name",pendingExportFileName)
+                    .apply();
+
+            resultCard.post(()->{
+                if(activeScrollView!=null) activeScrollView.smoothScrollTo(0,resultCard.getBottom());
+            });
+        });
+
+        saveText.setOnClickListener(v->{
+            if(pendingExportText==null || pendingExportText.trim().isEmpty()){
+                toast("Bitte zuerst eine Liste erzeugen");
+                return;
+            }
+            savePackingListAsText();
+        });
+    }
+
+    private String buildPackingTable(ArrayList<JSONObject> selectedMembers, ArrayList<String> selectedTypes){
+        ArrayList<String> headers=new ArrayList<>();
+        headers.add("Name");
+        headers.addAll(selectedTypes);
+
+        ArrayList<ArrayList<String>> rows=new ArrayList<>();
+        for(JSONObject member:selectedMembers){
+            ArrayList<String> row=new ArrayList<>();
+            row.add(memberLabel(member));
+
+            LinkedHashMap<String,String> sizes=latestSizesForMember(member.optString("id"));
+            for(String type:selectedTypes){
+                String size=sizes.get(type);
+                row.add(size==null || size.trim().isEmpty() ? "-" : size.trim());
+            }
+            rows.add(row);
+        }
+
+        int[] widths=new int[headers.size()];
+        for(int i=0;i<headers.size();i++) widths[i]=headers.get(i).length();
+
+        for(ArrayList<String> row:rows){
+            for(int i=0;i<row.size();i++){
+                widths[i]=Math.max(widths[i],row.get(i).length());
+            }
+        }
+
+        StringBuilder out=new StringBuilder();
+        appendTableRow(out,headers,widths);
+
+        for(int i=0;i<widths.length;i++){
+            if(i>0) out.append("-+-");
+            for(int j=0;j<widths[i];j++) out.append("-");
+        }
+        out.append("\n");
+
+        for(ArrayList<String> row:rows) appendTableRow(out,row,widths);
+
+        out.append("\nPersonen: ").append(rows.size()).append("\n");
+        out.append("Erstellt: ")
+                .append(new SimpleDateFormat("dd.MM.yyyy HH:mm",Locale.GERMANY).format(new Date()))
+                .append("\n");
+
+        return out.toString();
+    }
+
+    private void appendTableRow(StringBuilder out, ArrayList<String> cells, int[] widths){
+        for(int i=0;i<cells.size();i++){
+            if(i>0) out.append(" | ");
+            String value=cells.get(i);
+            out.append(value);
+            for(int s=0;s<widths[i]-value.length();s++) out.append(" ");
+        }
+        out.append("\n");
+    }
+
+    private void savePackingListAsText(){
+        try{
+            Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("text/plain");
+            intent.putExtra(Intent.EXTRA_TITLE,pendingExportFileName);
+            startActivityForResult(intent,REQUEST_SAVE_PACKLIST);
+        }catch(Exception e){
+            toast("Textdatei konnte nicht geöffnet werden");
+        }
+    }
+
+    @Override protected void onActivityResult(int requestCode,int resultCode,Intent data){
+        super.onActivityResult(requestCode,resultCode,data);
+
+        if(requestCode==REQUEST_SAVE_PACKLIST && resultCode==RESULT_OK && data!=null){
+            Uri uri=data.getData();
+            if(uri==null) return;
+
+            try(OutputStream out=getContentResolver().openOutputStream(uri)){
+                if(out==null){
+                    toast("Datei konnte nicht gespeichert werden");
+                    return;
+                }
+                out.write(pendingExportText.getBytes("UTF-8"));
+                out.flush();
+                toast("Textdatei gespeichert");
+            }catch(Exception e){
+                toast("Fehler beim Speichern: "+e.getMessage());
+            }
+        }
+    }
 
     private void showStock(){
         base("Bestand",true);
